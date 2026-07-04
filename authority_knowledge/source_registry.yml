@@ -1,0 +1,103 @@
+sources:
+  - id: idkd_abdomen_pelvis_2018_2021
+    filename: idkd_abdomen_pelvis_2018_2021.pdf
+    local_filenames: ["1002110.pdf"]
+    title: "Diseases of the Abdomen and Pelvis 2018-2021: Diagnostic Imaging - IDKD Book"
+    publisher: "Springer Nature / OAPEN"
+    source_url: "https://library.oapen.org/handle/20.500.12657/27892"
+    pdf_url: "https://library.oapen.org/bitstream/handle/20.500.12657/27892/1002110.pdf?sequence=1&isAllowed=y"
+    source_type: "open_access_book"
+    license_note: "CC BY 4.0 where applicable; preserve attribution and source URL"
+    authority_level: 5
+    domain: ["abdominal_imaging", "ct", "mri", "abdomen_pelvis"]
+    allowed_for_rag: true
+
+  - id: idkd_abdomen_pelvis_2023_2026
+    filename: idkd_abdomen_pelvis_2023_2026.pdf
+    title: "Diseases of the Abdomen and Pelvis 2023-2026"
+    publisher: "Springer Nature"
+    source_url: "https://link.springer.com/book/10.1007/978-3-031-27355-1"
+    pdf_url: "https://link.springer.com/content/pdf/10.1007/978-3-031-27355-1.pdf"
+    source_type: "open_access_book"
+    license_note: "Open access Springer book; preserve attribution and source URL"
+    authority_level: 5
+    domain: ["abdominal_imaging", "ct", "mri", "abdomen_pelvis"]
+    allowed_for_rag: true
+
+  - id: medical_segmentation_decathlon
+    filename: medical_segmentation_decathlon.pdf
+    local_filenames: ["s41467-022-30695-9.pdf"]
+    title: "The Medical Segmentation Decathlon"
+    publisher: "Nature Communications / PMC"
+    source_url: "https://www.nature.com/articles/s41467-022-30695-9"
+    pdf_url: "https://www.nature.com/articles/s41467-022-30695-9.pdf"
+    source_type: "peer_reviewed_open_access_paper"
+    license_note: "Open access article; preserve citation and source URL"
+    authority_level: 5
+    domain: ["medical_segmentation", "benchmark", "evaluation", "generalization"]
+    allowed_for_rag: true
+
+  - id: metrics_3d_segmentation_taha_2015
+    filename: metrics_3d_medical_image_segmentation_taha_2015.pdf
+    local_filenames: ["12880_2015_Article_68.pdf"]
+    title: "Metrics for evaluating 3D medical image segmentation: analysis, selection, and tool"
+    publisher: "BMC Medical Imaging / PMC"
+    source_url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC4533825/"
+    pdf_url: "https://bmcmedimaging.biomedcentral.com/counter/pdf/10.1186/s12880-015-0068-x.pdf"
+    source_type: "peer_reviewed_open_access_paper"
+    license_note: "Open access article; preserve citation and source URL"
+    authority_level: 5
+    domain: ["segmentation_metrics", "dice", "hausdorff", "hd95", "evaluation"]
+    allowed_for_rag: true
+
+  - id: guideline_segmentation_metrics_mueller_2022
+    filename: guideline_segmentation_metrics_mueller_2022.pdf
+    local_filenames: ["s13104-022-06096-y.pdf"]
+    title: "Towards a guideline for evaluation metrics in medical image segmentation"
+    publisher: "BMC Research Notes"
+    source_url: "https://link.springer.com/article/10.1186/s13104-022-06096-y"
+    pdf_url: "https://opus.bibliothek.uni-augsburg.de/opus4/files/97056/s13104-022-06096-y.pdf"
+    source_type: "peer_reviewed_open_access_paper"
+    license_note: "Open access article; preserve citation and source URL"
+    authority_level: 5
+    domain: ["segmentation_metrics", "dice", "jaccard", "hausdorff", "evaluation_bias"]
+    allowed_for_rag: true
+
+  - id: totalsegmentator_ct_segmentation
+    filename: totalsegmentator_ct_segmentation.pdf
+    local_filenames: ["2208.05868v2.pdf"]
+    title: "TotalSegmentator: Robust Segmentation of 104 Anatomic Structures in CT Images"
+    publisher: "Radiology: Artificial Intelligence / PMC / arXiv"
+    source_url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC10546353/"
+    pdf_url: "https://arxiv.org/pdf/2208.05868.pdf"
+    source_type: "peer_reviewed_paper_or_preprint"
+    license_note: "Use for research context with citation; preserve source URL"
+    authority_level: 4
+    domain: ["ct_segmentation", "multi_organ_segmentation", "anatomic_structures", "dice"]
+    allowed_for_rag: true
+
+  - id: amos_abdominal_multi_organ_segmentation
+    filename: amos_abdominal_multi_organ_segmentation.pdf
+    local_filenames: ["2206.08023v3.pdf"]
+    title: "AMOS: A Large-Scale Abdominal Multi-Organ Benchmark for Versatile Medical Image Segmentation"
+    publisher: "arXiv / AMOS Challenge"
+    source_url: "https://arxiv.org/abs/2206.08023"
+    pdf_url: "https://arxiv.org/pdf/2206.08023.pdf"
+    source_type: "research_paper_or_preprint"
+    license_note: "Use as research context with citation; preserve source URL"
+    authority_level: 4
+    domain: ["abdominal_multi_organ_segmentation", "ct", "mri", "benchmark"]
+    allowed_for_rag: true
+
+  - id: word_abdominal_organ_segmentation
+    filename: word_abdominal_organ_segmentation.pdf
+    local_filenames: ["2111.02403v5.pdf"]
+    title: "WORD: A large scale dataset, benchmark and clinical applicable study for abdominal organ segmentation from CT image"
+    publisher: "arXiv"
+    source_url: "https://arxiv.org/abs/2111.02403"
+    pdf_url: "https://arxiv.org/pdf/2111.02403.pdf"
+    source_type: "research_paper_or_preprint"
+    license_note: "Use as research context with citation; preserve source URL"
+    authority_level: 4
+    domain: ["abdominal_organ_segmentation", "ct", "benchmark"]
+    allowed_for_rag: true
