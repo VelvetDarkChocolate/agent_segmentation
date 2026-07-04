@@ -2,6 +2,12 @@
 
 This project packages an MMRSG-UNet medical image segmentation model into a FastAPI-based AI platform demo.
 
+<img width="2547" height="1232" alt="agent" src="https://github.com/user-attachments/assets/d7782f23-54c4-4014-8ec5-df105f2896ce" />
+<img width="2020" height="965" alt="医学图像分割平台照片" src="https://github.com/user-attachments/assets/73d5c461-4e86-4c0f-8511-cacb237be3bd" />
+<img width="2034" height="977" alt="医学图像分割平台照片2" src="https://github.com/user-attachments/assets/fc7f0c0f-448e-4ef3-922a-8e3b7fcaf823" />
+
+
+
 ## DevOps & Quality Highlights
 
 - FastAPI inference API with frontend upload workflow.
