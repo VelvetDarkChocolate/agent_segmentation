@@ -7,8 +7,8 @@ An AI platform is more than a model endpoint. A practical platform usually inclu
 | Area | Project Mapping |
 |---|---|
 | Data input | React case upload and FastAPI multipart upload |
-| Model service | PyTorch MMRSG-UNet inference through `/predict` |
-| Task scheduling | Synchronous `/predict` plus Redis/Celery async task demo |
+| Model service | PyTorch MMRSG-UNet inference through shared `backend/services/inference_service.py` |
+| Task scheduling | Synchronous `/predict/sync` for small demos plus persisted Redis/Celery tasks through `/api/v1/segmentations` |
 | Result display | React workbench segmentation overlay and report page |
 | Quality evaluation | Dice/IoU metrics, UAT checklist, regression scope |
 | Operations monitoring | `/health`, `/version`, runbook, logs |
@@ -126,8 +126,8 @@ PM, Backend, Frontend, Model, QA
 ## Decisions
 - Use `/health` to drive environment status in frontend.
 - Keep model preset as demo metadata in v0.2.
-- Use `/predict` for real model inference in workbench.
-- Use Redis/Celery flow to demonstrate async queue and high-concurrency handling.
+- Keep `/predict/sync` for small-image demo inference in workbench.
+- Use `/api/v1/segmentations` for real queued inference; Redis/Celery must not be treated as the source of truth.
 
 ## Action Items
 | Item | Owner | Due Date | Status |

@@ -11,6 +11,7 @@ export default function SegmentationWorkbench({ onOpenAssistant }) {
   const [activeIndex, setActiveIndex] = useState(0)
   const [files, setFiles] = useState([])
   const [running, setRunning] = useState(false)
+  const [queueRunning, setQueueRunning] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -28,6 +29,8 @@ export default function SegmentationWorkbench({ onOpenAssistant }) {
       setTask(response.data)
       if (response.data.state === 'SUCCESS') {
         setResult(response.data.result)
+        setRealResults(response.data.result?.results || [])
+        localStorage.setItem('latestSegmentationResult', JSON.stringify(response.data.result || {}))
         clearInterval(timer)
       }
     }, 1000)
@@ -55,7 +58,7 @@ export default function SegmentationWorkbench({ onOpenAssistant }) {
     formData.append('inference_mode', 'accurate')
 
     try {
-      const response = await api.post('/predict', formData, {
+      const response = await api.post('/predict/sync', formData, {
         timeout: 120000,
         headers: { 'Content-Type': 'multipart/form-data' },
       })
@@ -75,6 +78,31 @@ export default function SegmentationWorkbench({ onOpenAssistant }) {
       setError(err.response?.data?.message || err.message || '真实模型推理失败')
     } finally {
       setRunning(false)
+    }
+  }
+
+  async function startQueuedSegmentation() {
+    if (!caseId) {
+      setError('请先在病例管理中上传病例，并选择要分割的病例')
+      return
+    }
+
+    setError('')
+    setResult(null)
+    setRealResults([])
+    setActiveIndex(0)
+    setQueueRunning(true)
+    try {
+      const response = await api.post('/api/v1/segmentations', {
+        case_id: caseId,
+        model_name: 'Seg-Model v2.0',
+        threshold: Number(threshold),
+      })
+      setTask(response.data)
+    } catch (err) {
+      setError(err.response?.data?.detail || '任务提交失败')
+    } finally {
+      setQueueRunning(false)
     }
   }
 
@@ -98,7 +126,7 @@ export default function SegmentationWorkbench({ onOpenAssistant }) {
               <span>{activeResult ? 'MMRSG-UNet Processing' : result?.preview ? `${result.preview.slice_index} / ${result.preview.total_slices}` : '128 / 256'}</span>
             </div>
             {activeResult ? (
-              <img src={activeResult.image_base64} alt={`${activeResult.filename} segmentation`} />
+              <img src={activeResult.image_base64 || activeResult.overlay_url} alt={`${activeResult.filename} segmentation`} />
             ) : (
               <>
                 <div className="organ liver"></div>
@@ -178,7 +206,10 @@ export default function SegmentationWorkbench({ onOpenAssistant }) {
           />
 
           <button type="button" onClick={startSegmentation} disabled={running}>
-            {running ? '真实模型推理中...' : '开始分割'}
+            {running ? '同步推理中...' : '小图同步分割'}
+          </button>
+          <button type="button" className="secondary-action" onClick={startQueuedSegmentation} disabled={queueRunning || running}>
+            {queueRunning ? '任务提交中...' : '提交病例任务'}
           </button>
           {error && <p className="hint error">{error}</p>}
 

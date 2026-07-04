@@ -19,6 +19,7 @@ __pycache__/
 output_acdc_100/
 output_acdc_test/
 uploads/
+object_store/
 frontend/node_modules/
 frontend/dist/
 authority_knowledge/raw/*
@@ -28,5 +29,6 @@ authority_knowledge/chunks/*.jsonl
 authority_knowledge/manifest.json
 authority_knowledge/index_status.json
 data/chroma_db/
+知识库书籍/*.pdf
 !authority_knowledge/raw/.gitkeep
 !authority_knowledge/chunks/.gitkeep

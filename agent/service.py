@@ -1,6 +1,8 @@
+import asyncio
+import re
 from typing import Any, Dict, List
 
-import requests
+import httpx
 
 from agent.authority_retriever import authority_status, search_authority_pdf_chunks
 from agent.prompts import LOCAL_PDF_AUTHORITY_SEGMENTATION_PROMPT, FORBIDDEN_TERMS, SAFETY_STATEMENT
@@ -67,10 +69,28 @@ def build_grounded_prompt_context(
 def sanitize_answer(answer: str) -> str:
     sanitized = answer
     for term in FORBIDDEN_TERMS:
-        sanitized = sanitized.replace(term, "不作临床判断")
+        sanitized = re.sub(re.escape(term), "不作临床判断", sanitized, flags=re.IGNORECASE)
     if SAFETY_STATEMENT not in sanitized:
         sanitized += f"\n\n{SAFETY_STATEMENT}"
     return sanitized
+
+
+def grounding_warnings(answer: str, citations: List[Dict[str, Any]]) -> List[str]:
+    warnings = []
+    if not citations:
+        return warnings
+
+    cited_source_ids = {citation["source_id"] for citation in citations}
+    mentioned_source_ids = {source_id for source_id in cited_source_ids if source_id in answer}
+    if not mentioned_source_ids:
+        warnings.append("回答未显式提及已召回 PDF chunk 的 source_id，已返回 citations 供前端展示。")
+
+    required_fields = {"title", "publisher", "source_url", "page_start", "page_end"}
+    for citation in citations:
+        missing = sorted(field for field in required_fields if citation.get(field) in [None, ""])
+        if missing:
+            warnings.append(f"citation {citation.get('chunk_id')} metadata missing: {', '.join(missing)}")
+    return warnings
 
 
 def fallback_authority_report(segmentation_facts: Dict[str, Any], citations: List[Dict[str, Any]]) -> str:
@@ -114,26 +134,34 @@ def fallback_authority_report(segmentation_facts: Dict[str, Any], citations: Lis
     return "\n".join(lines)
 
 
-def call_llm(api_key: str, base_url: str, model_name: str, message: str, context: str) -> str:
-    response = requests.post(
-        f"{base_url.rstrip('/')}/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
-            "model": model_name,
-            "messages": [
-                {"role": "system", "content": LOCAL_PDF_AUTHORITY_SEGMENTATION_PROMPT},
-                {"role": "user", "content": f"{context}\n\n用户问题：{message}"},
-            ],
-            "temperature": 0.2,
-            "stream": False,
-        },
-        timeout=45,
-    )
-    response.raise_for_status()
-    return response.json()["choices"][0]["message"]["content"]
+async def call_llm(api_key: str, base_url: str, model_name: str, message: str, context: str) -> str:
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": LOCAL_PDF_AUTHORITY_SEGMENTATION_PROMPT},
+            {"role": "user", "content": f"{context}\n\n用户问题：{message}"},
+        ],
+        "temperature": 0.2,
+        "stream": False,
+    }
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(45.0)) as client:
+                response = await client.post(
+                    f"{base_url.rstrip('/')}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json=payload,
+                )
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
+        except Exception as exc:
+            last_error = exc
+            await asyncio.sleep(0.4 * (attempt + 1))
+    raise RuntimeError(f"LLM request failed after retries: {last_error}") from last_error
 
 
-def analyze_segmentation_with_authority(
+async def analyze_segmentation_with_authority(
     message: str,
     segmentation_result: Dict[str, Any],
     top_k: int,
@@ -150,13 +178,14 @@ def analyze_segmentation_with_authority(
 
     if api_key and citations:
         try:
-            answer = call_llm(api_key, base_url, model_name, message, context)
+            answer = await call_llm(api_key, base_url, model_name, message, context)
         except Exception:
             answer = fallback_authority_report(segmentation_facts, citations)
     else:
         answer = fallback_authority_report(segmentation_facts, citations)
 
     answer = sanitize_answer(answer)
+    warnings = grounding_warnings(answer, citations)
     return {
         "answer": answer,
         "tools_used": [
@@ -172,6 +201,7 @@ def analyze_segmentation_with_authority(
             "min_authority_level": min_authority_level,
             "authority_only": authority_only,
             "sources_used": sorted({citation["source_id"] for citation in citations}),
+            "grounding_warnings": warnings,
         },
         "report": {"title": "Local-PDF Authority Segmentation Research Report", "body": answer},
     }

@@ -1,63 +1,33 @@
-import time
 from celery_app import celery_app
+from backend.services.segmentation_service import fail_segmentation_task, run_persisted_segmentation_task
 
 
 @celery_app.task(bind=True)
 def segmentation_task(
     self,
-    case_id: str,
-    filenames: list[str],
+    task_id: str | None = None,
+    case_id: str | None = None,
+    filenames: list[str] | None = None,
     model_name: str = "Seg-Model v2.0",
     threshold: float = 0.5,
 ):
-    total = max(len(filenames), 1)
+    def update_progress(progress: int, message: str) -> None:
+        self.update_state(state="PROGRESS", meta={"progress": progress, "message": message})
 
-    for index, filename in enumerate(filenames, start=1):
-        progress = int(index / total * 80)
-        self.update_state(
-            state="PROGRESS",
-            meta={
-                "progress": progress,
-                "message": f"正在处理 {filename}",
-            },
+    try:
+        if not task_id:
+            raise ValueError(
+                "旧版 Celery 消息缺少 task_id，请重新通过 /api/v1/segmentations 创建持久化任务。"
+            )
+        if not case_id:
+            raise ValueError("任务缺少 case_id")
+        return run_persisted_segmentation_task(
+            task_id=task_id,
+            case_id=case_id,
+            model_name=model_name,
+            threshold=threshold,
+            update_progress=update_progress,
         )
-        time.sleep(1)
-
-    self.update_state(
-        state="PROGRESS",
-        meta={
-            "progress": 90,
-            "message": "正在生成量化指标与质控结果",
-        },
-    )
-    time.sleep(1)
-
-    return {
-        "case_id": case_id,
-        "model_name": model_name,
-        "threshold": threshold,
-        "status": "completed",
-        "progress": 100,
-        "preview": {
-            "slice_index": 128,
-            "total_slices": 256,
-            "mode": "demo_overlay",
-            "message": "Demo 分割已完成，当前预览为模拟叠加图",
-        },
-        "metrics": {
-            "dice": 0.932,
-            "iou": 0.878,
-            "latency_seconds": 12.6,
-        },
-        "organs": [
-            {"name": "肝脏", "volume_cm3": 1423.6, "ratio": "-", "max_diameter_cm": "-"},
-            {"name": "肿瘤", "volume_cm3": 38.7, "ratio": "2.72%", "max_diameter_cm": 4.32},
-            {"name": "血管", "volume_cm3": 96.4, "ratio": "6.78%", "max_diameter_cm": "-"},
-            {"name": "胆囊", "volume_cm3": 22.1, "ratio": "1.55%", "max_diameter_cm": "-"},
-        ],
-        "review": {
-            "ai_status": "AI初筛完成",
-            "human_status": "待人工复核",
-            "quality": "通过",
-        },
-    }
+    except Exception as exc:
+        fail_segmentation_task(task_id, str(exc))
+        raise

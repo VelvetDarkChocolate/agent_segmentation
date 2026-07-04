@@ -41,6 +41,7 @@ grpcio==1.70.0
 h5py==3.11.0
 hf-xet==1.1.10
 huggingface-hub==0.35.3
+httpx
 hyperlink==21.0.0
 idna==3.4
 imageio==2.35.1
@@ -104,6 +105,7 @@ pytz==2025.2
 PyWavelets==1.4.1
 PyYAML==6.0.3
 pypdf==5.9.0
+PyMySQL==1.2.0
 pyzmq==25.1.0
 redo==3.0.0
 regex==2024.11.6

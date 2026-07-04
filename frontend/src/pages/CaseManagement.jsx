@@ -53,7 +53,7 @@ export default function CaseManagement() {
 
       <div className="stats">
         <div>今日上传 <strong>{cases.length}</strong></div>
-        <div>处理中任务 <strong>{cases.filter((item) => item.status === '处理中').length}</strong></div>
+        <div>处理中任务 <strong>{cases.filter((item) => ['queued', 'running'].includes(item.status)).length}</strong></div>
         <div>完成率 <strong>92.6%</strong></div>
         <div>平均耗时 <strong>3.6 min</strong></div>
       </div>
@@ -91,7 +91,7 @@ export default function CaseManagement() {
                 <td>{item.modality}</td>
                 <td>{item.body_part}</td>
                 <td>{item.file_count}</td>
-                <td><span className="status">{item.status}</span></td>
+                <td><span className="status">{item.status_label || item.status}</span></td>
                 <td>{item.created_at}</td>
               </tr>
             ))}

@@ -1,18 +1,31 @@
+import asyncio
 import os
-import io
-import uuid
-import numpy as np
-import base64
-import requests
+import time
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import JSONResponse, FileResponse
+from typing import Any
+
+import httpx
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Any, Dict, List
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from agent.authority_retriever import authority_status
 from agent.service import analyze_segmentation_with_authority
+from backend.core.config import ROOT_DIR, settings
+from backend.core.database import init_db
+from backend.services.case_service import create_case_from_uploads, list_cases
+from backend.services.inference_service import InferenceUnavailable, inference_service
+from backend.services.segmentation_service import (
+    attach_celery_task,
+    case_exists,
+    create_segmentation_record,
+    fail_segmentation_task,
+    get_task_status_payload,
+    list_reports,
+)
+from backend.services.storage_service import object_store
 
 try:
     from celery.result import AsyncResult
@@ -26,37 +39,18 @@ except Exception as exc:  # pragma: no cover - exercised in lightweight CI envs
     segmentation_task = None
     CELERY_IMPORT_ERROR = str(exc)
 
-try:
-    import torch
-    from PIL import Image
-    from torchvision import transforms
 
-    from networks.vision_transformer import MMRSGUNet as ViT_seg
-    from config import get_config
-
-    ML_IMPORT_ERROR = ""
-except Exception as exc:  # pragma: no cover - exercised in lightweight CI envs
-    torch = None
-    Image = None
-    transforms = None
-    ViT_seg = None
-    get_config = None
-    ML_IMPORT_ERROR = str(exc)
-
-import time
-import logging
-
-APP_VERSION = os.getenv("APP_VERSION", "0.1.0")
-DEFAULT_MODEL_PATH = Path(__file__).resolve().parent / "model" / "epoch_241.pth"
-MODEL_PATH = os.getenv("MODEL_PATH") or str(DEFAULT_MODEL_PATH)
 START_TIME = time.time()
-UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(exist_ok=True)
-CASE_STORE: Dict[str, dict] = {}
-REPORT_STORE: Dict[str, dict] = {}
+init_db()
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("medical-ai-platform")
+app = FastAPI(title="MMRSG-UNet Medical API")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.mount("/objects", StaticFiles(directory=object_store.root), name="objects")
 
 
 class SegmentationRequest(BaseModel):
@@ -72,13 +66,13 @@ class AgentChatMessage(BaseModel):
 
 class AgentChatRequest(BaseModel):
     message: str
-    history: List[AgentChatMessage] = []
+    history: list[AgentChatMessage] = Field(default_factory=list)
     segmentation_context: str = ""
 
 
 class SegmentationAnalyzeRequest(BaseModel):
     message: str
-    segmentation_result: Dict[str, Any]
+    segmentation_result: dict[str, Any]
     top_k: int = 8
     authority_only: bool = True
     min_authority_level: int = 4
@@ -91,104 +85,38 @@ DEEPSEEK_SYSTEM_PROMPT = """
 """
 
 
-def load_local_env():
-    env_path = Path(".env")
-    if not env_path.exists():
-        return
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
-load_local_env()
-
-# ==========================================
-# 2. FastAPI 服务构建
-# ==========================================
-app = FastAPI(title="MMRSG-UNet Medical API")
-
-# 允许跨域请求（方便前端调用）
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ==========================================
-# 1. 初始化配置与模型 (保留您原本的逻辑)
-# ==========================================
-class MockArgs:
-    dataset = 'Synapse'
-    img_size = 224
-    num_classes = 9
-    cfg = 'configs/cswin_tiny_224_lite.yaml'
-    opts = None
-    zip = False
-    cache_mode = 'part'
-    resume = None
-    accumulation_steps = None
-    use_checkpoint = False
-    amp_opt_level = 'O1'
-    tag = None
-    eval = False
-    throughput = False
-    batch_size = 1
-    base_lr = 0.0001
-    max_epochs = 250
-    output_dir = './'
-    list_dir = './lists/lists_Synapse'
-    volume_path = '../data/Synapse'
-
-args = MockArgs()
-device = torch.device("cuda" if torch and torch.cuda.is_available() else "cpu") if torch else "unavailable"
-model = None
-config = None
-
-if not torch or not ViT_seg or not get_config:
-    logger.warning("Model dependencies are unavailable. Model will not be loaded: %s", ML_IMPORT_ERROR)
-elif not MODEL_PATH or not Path(MODEL_PATH).exists():
-    logger.warning("MODEL_PATH is not set or does not exist. Model will not be loaded: %s", MODEL_PATH)
-else:
-    config = get_config(args)
-    model = ViT_seg(config, img_size=args.img_size, num_classes=args.num_classes).to(device)
-    checkpoint = torch.load(MODEL_PATH, map_location=device)
-    new_state_dict = {}
-    for k, v in checkpoint.items():
-        new_key = k.replace('cswin_unet.', 'mmrsg_unet.').replace('MSCA', 'msdc')
-        new_state_dict[new_key] = v
-
-    model.load_state_dict(new_state_dict, strict=False)
-    model.eval()
-    logger.info("Model loaded from %s", MODEL_PATH)
-
-@app.get("/health")
-async def health_check():
+def celery_state_for(status: str) -> str:
     return {
-        "status": "ok",
-        "app_version": APP_VERSION,
-        "model_loaded": model is not None,
-        "device": str(device),
-        "uptime_seconds": round(time.time() - START_TIME, 2)
+        "uploaded": "PENDING",
+        "queued": "PENDING",
+        "running": "PROGRESS",
+        "completed": "SUCCESS",
+        "failed": "FAILURE",
+        "reviewed": "SUCCESS",
+    }.get(status, "PENDING")
+
+
+def task_response(payload: dict[str, Any]) -> dict[str, Any]:
+    state = celery_state_for(payload["status"])
+    response = {
+        "task_id": payload["task_id"],
+        "celery_task_id": payload.get("celery_task_id"),
+        "case_id": payload["case_id"],
+        "status": payload["status"],
+        "state": state,
+        "progress": payload.get("progress", 0),
+        "message": payload.get("message") or ("任务完成" if state == "SUCCESS" else "任务处理中"),
+        "error": payload.get("error", ""),
     }
+    if state == "SUCCESS":
+        response["result"] = payload.get("result", {})
+    return response
 
 
-@app.get("/version")
-async def version():
-    return {
-        "app_name": "medical-ai-segmentation-platform",
-        "version": APP_VERSION
-    }
-
-
-@app.post("/api/agent/chat")
-async def agent_chat(payload: AgentChatRequest):
-    api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
-    base_url = (os.getenv("LLM_BASE_URL") or "https://api.deepseek.com").rstrip("/")
-    model_name = os.getenv("LLM_MODEL") or "deepseek-v4-flash"
+async def post_llm_chat(messages: list[dict[str, str]]) -> dict[str, Any]:
+    api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY") or ""
+    base_url = (os.getenv("LLM_BASE_URL") or settings.llm_base_url).rstrip("/")
+    model_name = os.getenv("LLM_MODEL") or settings.llm_model
 
     if base_url.startswith("sk-"):
         return {
@@ -215,6 +143,57 @@ async def agent_chat(payload: AgentChatRequest):
             "configured": False,
         }
 
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(45.0)) as client:
+                response = await client.post(
+                    f"{base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": model_name,
+                        "messages": messages,
+                        "temperature": 0.2,
+                        "stream": False,
+                    },
+                )
+            response.raise_for_status()
+            data = response.json()
+            return {"answer": data["choices"][0]["message"]["content"], "model": model_name, "configured": True}
+        except Exception as exc:
+            last_error = exc
+            await asyncio.sleep(0.4 * (attempt + 1))
+    raise HTTPException(status_code=502, detail=f"DeepSeek 调用失败：{last_error}")
+
+
+@app.get("/health")
+async def health_check():
+    model_status = inference_service.status()
+    return {
+        "status": "ok",
+        "app_version": settings.app_version,
+        "model_loaded": model_status["model_loaded"],
+        "model_file_exists": model_status["model_file_exists"],
+        "model_dependencies_ready": model_status["dependencies_ready"],
+        "device": model_status["device"],
+        "database_url": settings.database_url.split("@")[-1],
+        "object_store": str(object_store.root),
+        "uptime_seconds": round(time.time() - START_TIME, 2),
+    }
+
+
+@app.get("/version")
+async def version():
+    return {"app_name": "medical-ai-segmentation-platform", "version": settings.app_version}
+
+
+@app.get("/")
+async def serve_frontend():
+    return FileResponse(ROOT_DIR / "index.html")
+
+
+@app.post("/api/agent/chat")
+async def agent_chat(payload: AgentChatRequest):
     messages = [{"role": "system", "content": DEEPSEEK_SYSTEM_PROMPT}]
     if payload.segmentation_context:
         messages.append(
@@ -232,33 +211,7 @@ async def agent_chat(payload: AgentChatRequest):
         if item.role in {"user", "assistant"} and item.content:
             messages.append({"role": item.role, "content": item.content})
     messages.append({"role": "user", "content": payload.message})
-
-    try:
-        response = requests.post(
-            f"{base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model_name,
-                "messages": messages,
-                "temperature": 0.2,
-                "stream": False,
-            },
-            timeout=45,
-        )
-        response.raise_for_status()
-        data = response.json()
-        answer = data["choices"][0]["message"]["content"]
-        return {
-            "answer": answer,
-            "model": model_name,
-            "configured": True,
-        }
-    except Exception as exc:
-        logger.exception("DeepSeek chat request failed")
-        raise HTTPException(status_code=502, detail=f"DeepSeek 调用失败：{exc}") from exc
+    return await post_llm_chat(messages)
 
 
 @app.get("/api/agent/authority/status")
@@ -273,19 +226,18 @@ async def reindex_authority_knowledge():
 
         return ingest_local_authority_pdfs()
     except Exception as exc:
-        logger.exception("Authority knowledge reindex failed")
         raise HTTPException(status_code=500, detail=f"Authority reindex failed: {exc}") from exc
 
 
 @app.post("/api/agent/segmentation/analyze")
 async def analyze_segmentation(payload: SegmentationAnalyzeRequest):
-    api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
-    base_url = (os.getenv("LLM_BASE_URL") or "https://api.deepseek.com").rstrip("/")
-    model_name = os.getenv("LLM_MODEL") or "deepseek-v4-flash"
+    base_url = (os.getenv("LLM_BASE_URL") or settings.llm_base_url).rstrip("/")
+    api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY") or ""
+    model_name = os.getenv("LLM_MODEL") or settings.llm_model
     if base_url.startswith("sk-"):
         api_key = ""
         base_url = "https://api.deepseek.com"
-    return analyze_segmentation_with_authority(
+    return await analyze_segmentation_with_authority(
         message=payload.message,
         segmentation_result=payload.segmentation_result,
         top_k=payload.top_k,
@@ -298,7 +250,7 @@ async def analyze_segmentation(payload: SegmentationAnalyzeRequest):
 
 
 @app.post("/api/agent/documents/upload")
-async def upload_agent_documents(files: List[UploadFile] = File(...)):
+async def upload_agent_documents(files: list[UploadFile] = File(...)):
     return {
         "status": "disabled_in_authority_only_mode",
         "received_files": [Path(file.filename).name for file in files],
@@ -312,41 +264,19 @@ async def upload_agent_documents(files: List[UploadFile] = File(...)):
 
 @app.post("/api/cases/upload")
 async def upload_case(
-    files: List[UploadFile] = File(...),
+    files: list[UploadFile] = File(...),
     modality: str = Form("CT"),
     body_part: str = Form("肝脏"),
 ):
     if not files:
         raise HTTPException(status_code=400, detail="请至少上传一个文件")
-
-    case_id = f"CASE-{time.strftime('%Y%m%d')}-{str(uuid.uuid4())[:8]}"
-    case_dir = UPLOAD_DIR / case_id
-    case_dir.mkdir(parents=True, exist_ok=True)
-
-    saved_files = []
-    for file in files:
-        safe_name = Path(file.filename).name
-        target_path = case_dir / safe_name
-        content = await file.read()
-        target_path.write_bytes(content)
-        saved_files.append(safe_name)
-
-    case = {
-        "case_id": case_id,
-        "modality": modality,
-        "body_part": body_part,
-        "file_count": len(saved_files),
-        "filenames": saved_files,
-        "status": "已上传",
-        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-    }
-    CASE_STORE[case_id] = case
-    return case
+    payload = [(Path(file.filename).name, await file.read()) for file in files]
+    return create_case_from_uploads(files=payload, modality=modality, body_part=body_part)
 
 
 @app.get("/api/cases")
-async def list_cases():
-    return list(CASE_STORE.values())
+async def get_cases():
+    return list_cases()
 
 
 @app.get("/api/models")
@@ -368,280 +298,117 @@ async def list_models():
             "status": "已发布",
             "version": "v1.2",
         },
-        {
-            "name": "Seg-Model v1.0",
-            "body_part": "肝脏分割",
-            "dice": 0.887,
-            "hd95": 9.64,
-            "status": "已下线",
-            "version": "v1.0",
-        },
     ]
 
 
+@app.post("/api/v1/segmentations")
 @app.post("/api/segmentations")
 async def create_segmentation_task(payload: SegmentationRequest):
-    case = CASE_STORE.get(payload.case_id)
-    if not case:
+    if not case_exists(payload.case_id):
         raise HTTPException(status_code=404, detail="病例不存在，请先上传数据")
     if segmentation_task is None:
         raise HTTPException(status_code=503, detail=f"Celery is unavailable: {CELERY_IMPORT_ERROR}")
+    task_record = create_segmentation_record(payload.case_id)
 
-    task = segmentation_task.delay(
-        case_id=payload.case_id,
-        filenames=case["filenames"],
-        model_name=payload.model_name,
-        threshold=payload.threshold,
-    )
-
-    case["status"] = "处理中"
-    case["task_id"] = task.id
-
-    return {
-        "task_id": task.id,
-        "case_id": payload.case_id,
-        "status": "queued",
-        "progress": 0,
-        "message": "任务已进入 Redis 队列，等待 Celery Worker 处理",
-    }
+    try:
+        celery_task = segmentation_task.delay(
+            task_id=task_record["task_id"],
+            case_id=payload.case_id,
+            model_name=payload.model_name,
+            threshold=payload.threshold,
+        )
+    except Exception as exc:
+        fail_segmentation_task(task_record["task_id"], f"Celery enqueue failed: {exc}")
+        raise HTTPException(status_code=503, detail=f"Celery enqueue failed: {exc}") from exc
+    attach_celery_task(task_record["task_id"], celery_task.id)
+    task_record["celery_task_id"] = celery_task.id
+    task_record["message"] = "任务已进入 Redis 队列，等待 Celery Worker 处理"
+    return task_response(task_record)
 
 
 @app.get("/api/tasks/{task_id}")
 async def get_task_status(task_id: str):
+    payload = get_task_status_payload(task_id)
+    if payload:
+        return task_response(payload)
+
     if AsyncResult is None or celery_app is None:
         return {
             "task_id": task_id,
             "state": "UNAVAILABLE",
+            "status": "unavailable",
             "progress": 0,
             "message": f"Celery is unavailable: {CELERY_IMPORT_ERROR}",
         }
 
     task = AsyncResult(task_id, app=celery_app)
-
-    if task.state == "PENDING":
-        return {
-            "task_id": task_id,
-            "state": task.state,
-            "progress": 0,
-            "message": "任务等待中",
-        }
-
-    if task.state in ["STARTED", "PROGRESS"]:
-        meta = task.info or {}
-        return {
-            "task_id": task_id,
-            "state": task.state,
-            "progress": meta.get("progress", 10),
-            "message": meta.get("message", "任务处理中"),
-        }
-
-    if task.state == "SUCCESS":
-        result = task.result
-        REPORT_STORE[result["case_id"]] = result
-        if result["case_id"] in CASE_STORE:
-            CASE_STORE[result["case_id"]]["status"] = "已完成"
-
-        return {
-            "task_id": task_id,
-            "state": task.state,
-            "progress": 100,
-            "message": "任务完成",
-            "result": result,
-        }
-
-    if task.state == "FAILURE":
-        return {
-            "task_id": task_id,
-            "state": task.state,
-            "progress": 0,
-            "message": str(task.info),
-        }
-
+    meta = task.info or {}
     return {
         "task_id": task_id,
         "state": task.state,
-        "progress": 0,
-        "message": "未知状态",
+        "status": task.state.lower(),
+        "progress": meta.get("progress", 0),
+        "message": meta.get("message", "任务处理中"),
     }
 
 
 @app.get("/api/reports")
-async def list_reports():
-    return list(REPORT_STORE.values())
+async def get_reports():
+    return list_reports()
 
-transform = transforms.Compose([
-    transforms.Resize((args.img_size, args.img_size)),
-    transforms.ToTensor()
-]) if transforms else None
 
-# 类别名称与颜色映射
-CLASS_NAMES = ["背景", "主动脉", "胆囊", "左肾", "右肾", "肝脏", "胰腺", "脾脏", "胃"]
-COLORS = np.array([
-    [0, 0, 0], [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0], 
-    [255, 0, 255], [0, 255, 255], [255, 128, 0], [128, 0, 128],
-], dtype=np.uint8)
+async def read_uploads(files: list[UploadFile]) -> list[tuple[str, bytes]]:
+    return [(Path(file.filename).name, await file.read()) for file in files]
 
-# ==========================================
-# 新增：让根目录直接返回我们的前端 HTML 网页
-# ==========================================
-@app.get("/")
-async def serve_frontend():
-    # 确保您的 index.html 和 app.py 放在同一个目录下
-    return FileResponse("index.html")
+
+async def run_sync_prediction(
+    files: list[UploadFile],
+    alpha: float,
+    model_preset: str,
+    inference_mode: str,
+):
+    if not files:
+        raise HTTPException(status_code=400, detail="请至少上传一个文件")
+    payload = await read_uploads(files)
+    try:
+        return await asyncio.to_thread(
+            inference_service.run,
+            files=payload,
+            alpha=alpha,
+            model_preset=model_preset,
+            inference_mode=inference_mode,
+            include_base64=True,
+            persist_outputs=True,
+        )
+    except InferenceUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/predict/sync")
+async def predict_sync_api(
+    files: list[UploadFile] = File(...),
+    alpha: float = Form(0.4),
+    model_preset: str = Form("abdomen"),
+    inference_mode: str = Form("accurate"),
+):
+    try:
+        result = await run_sync_prediction(files, alpha, model_preset, inference_mode)
+        return JSONResponse(content=result)
+    except HTTPException as exc:
+        return JSONResponse(content={"status": "error", "message": exc.detail}, status_code=exc.status_code)
+    except Exception as exc:
+        return JSONResponse(content={"status": "error", "message": str(exc)}, status_code=500)
+
 
 @app.post("/predict")
 async def predict_api(
-    files: List[UploadFile] = File(...), 
+    files: list[UploadFile] = File(...),
     alpha: float = Form(0.4),
-    model_preset: str = Form("abdomen"),     # 👈 新增：接收模型部位
-    inference_mode: str = Form("accurate")   # 👈 新增：接收推理精度
+    model_preset: str = Form("abdomen"),
+    inference_mode: str = Form("accurate"),
 ):
-    if model is None:
-        return JSONResponse(
-            content={
-                "status": "error",
-                "message": "Model is not loaded. Please set MODEL_PATH before inference."
-            },
-            status_code=503
-        )
+    return await predict_sync_api(files, alpha, model_preset, inference_mode)
 
-    try:
-        # 🔥 在后台终端打印前端传过来的设置，你可以借此确认前后端已经打通！
-        print(f"==== 🚀 收到推理任务 ====")
-        print(f"预设部位: [{model_preset}]")
-        print(f"推理模式: [{inference_mode}]")
-        print(f"切片数量: {len(files)} 张")
-        print(f"===========================")
-
-        images = []
-        original_sizes = []
-        
-        # 1. 异步读取所有上传的图片
-        for file in files:
-            image_bytes = await file.read()
-            image = Image.open(io.BytesIO(image_bytes))
-            if image.mode != 'RGB':
-                image = image.convert('RGB')
-            images.append(image)
-            original_sizes.append(image.size)
-
-        if not images:
-            return JSONResponse(content={"status": "error", "message": "未接收到图片"}, status_code=400)
-
-        # 2. 将多张图片堆叠成一个 Batch Tensor (B, C, H, W)
-        tensor_list = [transform(img) for img in images]
-        batch_tensor = torch.stack(tensor_list).to(device)
-
-        # 3. 批量推理 (GPU 并行加速)
-        # 💡 这里可以根据前端传来的 inference_mode 决定是否开启半精度加速
-        if inference_mode == "fast" and getattr(device, "type", "") == "cuda":
-            with torch.autocast(device_type='cuda', dtype=torch.float16):
-                with torch.no_grad():
-                    output = model(batch_tensor)
-        else:
-            with torch.no_grad():
-                output = model(batch_tensor)
-
-        # 输出形状应为 [B, num_classes, H, W]
-        preds = output[0] if isinstance(output, list) else output
-        # 批量获取类别索引，形状 [B, H, W]
-        pred_masks = torch.argmax(preds, dim=1).cpu().numpy()
-
-        # 4. 批量后处理与数据封装
-        results = []
-        for b in range(len(images)):
-            pred_mask = pred_masks[b]
-            original_size = original_sizes[b]
-            filename = files[b].filename
-
-            # 计算量化指标
-            total_pixels = pred_mask.shape[0] * pred_mask.shape[1]
-            metrics = []
-            for i in range(1, args.num_classes):
-                pixel_count = np.sum(pred_mask == i)
-                if pixel_count > 0:
-                    percentage = (pixel_count / total_pixels) * 100
-                    metrics.append({
-                        "organ": CLASS_NAMES[i],
-                        "pixel_count": int(pixel_count),
-                        "percentage": f"{percentage:.2f}%"
-                    })
-
-            # 图像后处理与半透明叠加
-            color_mask = COLORS[pred_mask]
-            mask_image = Image.fromarray(color_mask).resize(original_size, Image.NEAREST)
-            blend_image = Image.blend(images[b], mask_image, alpha=alpha)
-
-            # 转换为 Base64
-            buffered = io.BytesIO()
-            blend_image.save(buffered, format="PNG")
-            img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
-
-            results.append({
-                "filename": filename,
-                "image_base64": f"data:image/png;base64,{img_str}",
-                "metrics": metrics
-            })
-
-        return JSONResponse(content={
-            "status": "success",
-            "results": results
-        })
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return JSONResponse(content={"status": "error", "message": str(e)}, status_code=500)
-    
-async def predict_api(file: UploadFile = File(...), alpha: float = Form(0.4)):
-    try:
-        # 1. 读取并预处理图像
-        image_bytes = await file.read()
-        image = Image.open(io.BytesIO(image_bytes))
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
-        original_size = image.size
-
-        # 2. 模型推理
-        img_tensor = transform(image).unsqueeze(0).to(device)
-        with torch.no_grad():
-            output = model(img_tensor)
-            pred = output[0] if isinstance(output, list) else output
-            pred_mask = torch.argmax(pred, dim=1).squeeze(0).cpu().numpy()
-
-        # 3. 计算量化指标 (各个器官的像素面积占比)
-        total_pixels = pred_mask.shape[0] * pred_mask.shape[1]
-        metrics = []
-        for i in range(1, args.num_classes): # 跳过背景(0)
-            pixel_count = np.sum(pred_mask == i)
-            if pixel_count > 0:
-                percentage = (pixel_count / total_pixels) * 100
-                metrics.append({
-                    "organ": CLASS_NAMES[i],
-                    "pixel_count": int(pixel_count),
-                    "percentage": f"{percentage:.2f}%"
-                })
-
-        # 4. 图像后处理与叠加
-        color_mask = COLORS[pred_mask]
-        mask_image = Image.fromarray(color_mask).resize(original_size, Image.NEAREST)
-        blend_image = Image.blend(image, mask_image, alpha=alpha)
-
-        # 5. 转换为 Base64 以供前端渲染
-        buffered = io.BytesIO()
-        blend_image.save(buffered, format="PNG")
-        img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
-
-        return JSONResponse(content={
-            "status": "success",
-            "image_base64": f"data:image/png;base64,{img_str}",
-            "metrics": metrics
-        })
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return JSONResponse(content={"status": "error", "message": str(e)}, status_code=500)
 
 if __name__ == "__main__":
     import uvicorn

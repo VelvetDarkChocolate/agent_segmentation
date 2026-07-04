@@ -1,9 +1,3 @@
-<img width="2547" height="1232" alt="agent" src="https://github.com/user-attachments/assets/e640407a-14dd-44a0-b85e-09881ca77575" />
-
-<img width="2020" height="965" alt="医学图像分割平台照片" src="https://github.com/user-attachments/assets/9c0c43d2-b269-41ba-80a0-0c410afa690d" />
-<img width="2034" height="977" alt="医学图像分割平台照片2" src="https://github.com/user-attachments/assets/d6c24346-c1b2-475e-914e-e4796b72369c" />
-
-
 # Medical AI Segmentation Platform
 
 This project packages an MMRSG-UNet medical image segmentation model into a FastAPI-based AI platform demo.
@@ -19,6 +13,32 @@ This project packages an MMRSG-UNet medical image segmentation model into a Fast
 - GitHub Actions CI quality gate.
 - Dockerfile for containerized deployment.
 - Runbook for common production and support issues.
+
+## Backend Service Architecture
+
+The backend has been moved from in-process demo dictionaries to a service/repository layout:
+
+```text
+backend/
+  core/              config and database initialization
+  repositories/      case, task, and report persistence
+  services/          case upload, local object storage, inference, segmentation orchestration
+```
+
+Persistence rules:
+
+- `DATABASE_URL` is the primary data source for cases, reports, tasks, users, and model versions. Local development defaults to `sqlite:///data/app.db`; production can use PostgreSQL or MySQL through SQLAlchemy.
+- Uploaded images, generated masks, overlays, and report artifacts are stored under the local object store path `object_store/` by default. Set `OBJECT_STORE_DIR` to replace this with another mounted object-store path.
+- Redis is used only by Celery as the broker/result backend. It is not the source of truth for case, report, or task records.
+- Case status follows the state machine `uploaded -> queued -> running -> completed / failed / reviewed`.
+
+Inference rules:
+
+- `/predict/sync` is the small-image demo endpoint. `/predict` remains as a backward-compatible alias.
+- `POST /api/v1/segmentations` creates a real queued segmentation task for an uploaded case. `POST /api/segmentations` remains as a compatibility alias.
+- `/api/tasks/{task_id}` returns progress from the persisted task record; Celery workers update the same database record.
+- Synchronous prediction and Celery workers both call `backend/services/inference_service.py`, so preprocessing, model prediction, postprocessing, mask/overlay saving, and metrics generation are shared.
+- Real task outputs return `mask_url`, `overlay_url`, and structured metrics instead of stuffing every result into base64. The sync demo still includes `image_base64` for the existing UI preview.
 
 ## Why this project matters
 
@@ -101,6 +121,6 @@ Example request:
 
 1. Open the segmentation workbench.
 2. Upload `case0003_slice_124_img.png` or another PNG/JPG slice.
-3. Run `/predict` from the UI and get the real MMRSG-UNet output.
+3. Run `/predict/sync` from the UI and get the real MMRSG-UNet output, or upload a case and submit `/api/v1/segmentations` for queued inference.
 4. Click “结合本地权威 PDF 知识库分析”.
 5. The Research Agent combines organ pixel percentages with local PDF citations and generates a research report.
