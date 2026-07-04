@@ -1,9 +1,7 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { api } from '../services/api'
 
-export default function SegmentationWorkbench() {
-  const navigate = useNavigate()
+export default function SegmentationWorkbench({ onOpenAssistant }) {
   const [cases, setCases] = useState([])
   const [caseId, setCaseId] = useState('')
   const [threshold, setThreshold] = useState(0.5)
@@ -212,11 +210,10 @@ export default function SegmentationWorkbench() {
                 type="button"
                 className="secondary-action"
                 onClick={() => {
-                  const stored = JSON.parse(localStorage.getItem('latestSegmentationResult') || '{}')
-                  navigate('/agent', { state: { segmentationResult: stored } })
+                  onOpenAssistant?.()
                 }}
               >
-                结合本地权威 PDF 知识库分析
+                用 DeepSeek 助手分析
               </button>
             </div>
           )}

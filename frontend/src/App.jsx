@@ -3,14 +3,12 @@ import { BrowserRouter, Navigate, NavLink, Route, Routes } from 'react-router-do
 import DeepSeekAssistant from './components/DeepSeekAssistant.jsx'
 import CaseManagement from './pages/CaseManagement.jsx'
 import ModelCenter from './pages/ModelCenter.jsx'
-import ResearchAgent from './pages/ResearchAgent.jsx'
 import ResultReview from './pages/ResultReview.jsx'
 import SegmentationWorkbench from './pages/SegmentationWorkbench.jsx'
 
 const navItems = [
   { to: '/cases', label: '病例管理' },
   { to: '/workbench', label: '分割工作台' },
-  { to: '/agent', label: '科研 Agent' },
   { to: '/models', label: '模型中心' },
   { to: '/reports', label: '结果报告' },
 ]
@@ -53,8 +51,8 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/cases" replace />} />
             <Route path="/cases" element={<CaseManagement />} />
-            <Route path="/workbench" element={<SegmentationWorkbench />} />
-            <Route path="/agent" element={<ResearchAgent />} />
+            <Route path="/workbench" element={<SegmentationWorkbench onOpenAssistant={() => setAssistantOpen(true)} />} />
+            <Route path="/agent" element={<Navigate to="/workbench" replace />} />
             <Route path="/models" element={<ModelCenter />} />
             <Route path="/reports" element={<ResultReview />} />
           </Routes>
