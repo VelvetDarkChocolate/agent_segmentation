@@ -1,3 +1,9 @@
+<img width="2547" height="1232" alt="agent" src="https://github.com/user-attachments/assets/e640407a-14dd-44a0-b85e-09881ca77575" />
+
+<img width="2020" height="965" alt="医学图像分割平台照片" src="https://github.com/user-attachments/assets/9c0c43d2-b269-41ba-80a0-0c410afa690d" />
+<img width="2034" height="977" alt="医学图像分割平台照片2" src="https://github.com/user-attachments/assets/d6c24346-c1b2-475e-914e-e4796b72369c" />
+
+
 # Medical AI Segmentation Platform
 
 This project packages an MMRSG-UNet medical image segmentation model into a FastAPI-based AI platform demo.
