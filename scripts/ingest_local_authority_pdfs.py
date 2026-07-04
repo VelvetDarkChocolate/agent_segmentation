@@ -76,6 +76,12 @@ def ingest_local_authority_pdfs(
         "available_pdfs": validation["available_pdfs"],
         "registered_sources": len(registry.get("sources", [])),
         "store_type": store_status["store_type"],
+        "embedding": store_status.get("embedding", "unavailable"),
+        "vector_store_path": store_status.get("vector_store_path", ""),
+        "jsonl_backup_path": store_status.get("jsonl_backup_path", relative_or_absolute(chunks_path)),
+        "collection_name": store_status.get("collection_name", ""),
+        "fallback_available": store_status.get("fallback_available", chunks_path.exists()),
+        "chroma_error": store_status.get("chroma_error", ""),
         "pdf_dir": str(resolved_pdf_dir),
         "chunks_path": relative_or_absolute(chunks_path),
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -91,6 +97,8 @@ def main() -> None:
     print(f"Indexed chunks: {manifest['indexed_chunks']}")
     print(f"Missing PDFs: {len(manifest['missing_sources'])}")
     print(f"Store type: {manifest['store_type']}")
+    print(f"Vector store: {manifest['vector_store_path'] or 'unavailable'}")
+    print(f"JSONL backup: {manifest['jsonl_backup_path']}")
     print(f"Manifest: {MANIFEST_PATH.relative_to(ROOT_DIR)}")
     if manifest["failed_sources"]:
         print("Failed sources:")

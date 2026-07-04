@@ -25,7 +25,15 @@ The platform includes a MedResearch-Agent that generates research-assistance ana
 - real `/predict` segmentation output facts, including overlay, organ names, `pixel_count`, and `percentage`;
 - local authority PDFs that the user manually places under `authority_knowledge/pdfs/` or the existing `知识库书籍/` directory.
 
-The program does not search the web, download medical material, or treat webpage summaries as authoritative evidence. PDFs are parsed locally, chunked with page metadata, and written to `authority_knowledge/chunks/authority_chunks.jsonl`. Each answer cites PDF title, page range, publisher, and `source_url` when chunks are retrieved. If no local PDF evidence is retrieved, the Agent explicitly states that the local authority PDF knowledge base has insufficient evidence and only describes model-output facts.
+The program does not search the web, download medical material, or treat webpage summaries as authoritative evidence. The knowledge pipeline is explicit:
+
+1. `authority_knowledge/pdfs/*.pdf` contains the original authority PDFs manually provided by the user.
+2. `authority_knowledge/chunks/authority_chunks.jsonl` is only a chunk backup/intermediate file, not the formal vector knowledge base.
+3. `data/chroma_db/` is the formal ChromaDB vector knowledge base.
+4. `scripts/ingest_local_authority_pdfs.py` runs PDF parsing, chunking, JSONL backup writing, offline embedding, and ChromaDB persistence.
+5. Agent retrieval uses ChromaDB first and falls back to JSONL keyword retrieval only when ChromaDB, embedding, or `data/chroma_db/` is unavailable.
+
+Each answer cites PDF chunk metadata: title, publisher, `source_url`, `page_start`, and `page_end`. If no local PDF evidence is retrieved, the Agent explicitly states that the local authority PDF knowledge base has insufficient evidence and only describes model-output facts.
 
 Safety boundary: the Agent does not provide clinical diagnosis, treatment advice, or clinical conclusions. Every report includes:
 

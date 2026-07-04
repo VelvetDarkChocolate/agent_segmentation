@@ -11,6 +11,7 @@ buildtools==1.0.6
 cachetools==5.5.2
 certifi==2022.12.7
 charset-normalizer==2.1.1
+chromadb==1.0.20
 cmake==3.25.0
 comm==0.1.2
 constantly==23.10.4

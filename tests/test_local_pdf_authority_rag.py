@@ -27,11 +27,25 @@ def test_authority_status_handles_missing_pdfs():
     response = client.get("/api/agent/authority/status")
     assert response.status_code == 200
     data = response.json()
-    assert {"registered_sources", "available_pdfs", "missing_pdfs", "indexed_chunks", "manifest_path"}.issubset(data.keys())
+    assert {
+        "registered_sources",
+        "available_pdfs",
+        "missing_pdfs",
+        "indexed_chunks",
+        "manifest_path",
+        "vector_store_path",
+        "jsonl_backup_path",
+        "chroma_available",
+        "embedding_available",
+    }.issubset(data.keys())
     assert isinstance(data["missing_pdfs"], list)
 
 
-def test_search_authority_pdf_chunks_filters_min_level():
+def test_search_authority_pdf_chunks_filters_min_level(monkeypatch):
+    monkeypatch.setattr(
+        "agent.authority_retriever.search_chroma_chunks",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("chroma unavailable")),
+    )
     original = CHUNKS_PATH.read_text(encoding="utf-8") if CHUNKS_PATH.exists() else None
     CHUNKS_PATH.parent.mkdir(parents=True, exist_ok=True)
     chunks = [
@@ -87,6 +101,34 @@ def test_search_authority_pdf_chunks_filters_min_level():
             CHUNKS_PATH.unlink(missing_ok=True)
         else:
             CHUNKS_PATH.write_text(original, encoding="utf-8")
+
+
+def test_search_authority_pdf_chunks_prefers_chroma(monkeypatch):
+    def fake_chroma_search(*args, **kwargs):
+        return [
+            {
+                "score": 0.91,
+                "chunk": {
+                    "chunk_id": "chroma-1",
+                    "source_id": "metrics_3d_segmentation_taha_2015",
+                    "title": "Metrics for evaluating 3D medical image segmentation",
+                    "source_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4533825/",
+                    "pdf_url": "https://example.test/high.pdf",
+                    "publisher": "BMC Medical Imaging / PMC",
+                    "source_type": "peer_reviewed_open_access_paper",
+                    "authority_level": 5,
+                    "page_start": 4,
+                    "page_end": 5,
+                    "section_title": "Evaluation metrics",
+                    "preview": "Dice and Hausdorff metrics.",
+                },
+            }
+        ]
+
+    monkeypatch.setattr("agent.authority_retriever.search_chroma_chunks", fake_chroma_search)
+    results = search_authority_pdf_chunks("Dice HD95 segmentation", min_authority_level=4)
+    assert results[0]["retrieval_backend"] == "chroma"
+    assert results[0]["page_start"] == 4
 
 
 def test_segmentation_analyze_without_llm_key(monkeypatch):

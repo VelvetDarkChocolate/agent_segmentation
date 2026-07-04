@@ -15,6 +15,18 @@ Codex and the application must not search the web for medical material, scrape w
 
 The optional `local_filenames` field maps already-downloaded files such as `1002110.pdf` to the canonical registry entry without requiring the user to rename files.
 
+## Knowledge Store Layers
+
+- `authority_knowledge/pdfs/*.pdf`: original authority PDFs manually downloaded by the user.
+- `authority_knowledge/chunks/authority_chunks.jsonl`: intermediate chunk backup generated from PDFs. It is not the formal knowledge vector database.
+- `data/chroma_db/`: formal ChromaDB vector knowledge base used by the Agent.
+
+`scripts/ingest_local_authority_pdfs.py` must run the full local pipeline:
+
+PDF parsing -> chunk splitting -> write `authority_chunks.jsonl` backup -> offline embedding -> write ChromaDB under `data/chroma_db/`.
+
+Agent retrieval must prefer ChromaDB. JSONL keyword retrieval is only a fallback when ChromaDB is unavailable, embedding is unavailable, or `data/chroma_db/` does not exist.
+
 ## PDF Chunk Metadata
 
 Each chunk in `authority_knowledge/chunks/authority_chunks.jsonl` contains:
@@ -25,7 +37,7 @@ Each chunk in `authority_knowledge/chunks/authority_chunks.jsonl` contains:
 - `page_start`, `page_end`, `section_title`
 - `content_sha256`, `created_at`, `preview`, and full `text`
 
-The MVP uses `fallback_json` retrieval. Chroma can be added later, but JSONL remains the required fallback so local and CI runs do not depend on a vector service.
+The same metadata is written into ChromaDB so citations can always be traced back to PDF title, publisher, `source_url`, and page range.
 
 ## Citation Schema
 

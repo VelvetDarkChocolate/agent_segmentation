@@ -13,6 +13,13 @@ from agent.authority_pdf_loader import (
     load_source_registry,
     validate_local_pdfs,
 )
+from agent.rag_store import (
+    CHROMA_DB_PATH,
+    chroma_chunk_count,
+    chromadb_available,
+    embedding_available,
+    search_chroma_chunks,
+)
 
 
 MANIFEST_PATH = AUTHORITY_DIR / "manifest.json"
@@ -55,14 +62,21 @@ def authority_status() -> Dict[str, Any]:
             manifest = {}
 
     indexed_sources = manifest.get("indexed_sources", len({chunk.get("source_id") for chunk in chunks}))
-    indexed_chunks = manifest.get("indexed_chunks", len(chunks))
+    chroma_count = chroma_chunk_count()
+    indexed_chunks = manifest.get("indexed_chunks", chroma_count if chroma_count is not None else len(chunks))
+    chroma_ready = CHROMA_DB_PATH.exists() and chromadb_available() and embedding_available() and chroma_count is not None
     return {
         "registered_sources": len(registry.get("sources", [])),
         "available_pdfs": len(validation["available_pdfs"]),
         "missing_pdfs": validation["missing_pdfs"],
         "indexed_sources": indexed_sources,
         "indexed_chunks": indexed_chunks,
-        "store_type": manifest.get("store_type", "fallback_json"),
+        "store_type": "chroma" if chroma_ready else manifest.get("store_type", "fallback_json"),
+        "chroma_available": chromadb_available(),
+        "embedding_available": embedding_available(),
+        "chroma_ready": chroma_ready,
+        "vector_store_path": str(CHROMA_DB_PATH),
+        "jsonl_backup_path": str(CHUNKS_PATH),
         "manifest_path": str(MANIFEST_PATH),
         "pdf_dir": str(pdf_dir),
         "sources": [
@@ -145,6 +159,18 @@ def search_authority_pdf_chunks(
     min_authority_level: int = 4,
     filters: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
+    try:
+        hits = search_chroma_chunks(query, top_k=top_k, min_authority_level=min_authority_level)
+        return [
+            {
+                **citation_from_chunk(hit["chunk"], hit["score"]),
+                "retrieval_backend": "chroma",
+            }
+            for hit in hits
+        ]
+    except Exception:
+        pass
+
     filters = filters or {}
     ranked = []
     for chunk in load_authority_chunks():
@@ -163,7 +189,13 @@ def search_authority_pdf_chunks(
             ranked.append((score, chunk))
 
     ranked.sort(key=lambda item: item[0], reverse=True)
-    return [citation_from_chunk(chunk, score) for score, chunk in ranked[:top_k]]
+    return [
+        {
+            **citation_from_chunk(chunk, score),
+            "retrieval_backend": "fallback_json_keyword",
+        }
+        for score, chunk in ranked[:top_k]
+    ]
 
 
 def search_authority_knowledge(
